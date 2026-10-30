@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#0b1440">
+  <title>Neon Pulse</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- Main menu -->
+  <section id="screen-main" class="screen">
+    <h1 class="logo"><span>NEON</span><span>PULSE</span></h1>
+    <div class="main-buttons">
+      <button class="round-btn small" id="btn-icons" title="Icon kit">
+        <svg viewBox="0 0 40 40"><rect x="8" y="8" width="24" height="24" rx="2"/><rect x="14" y="14" width="12" height="12"/></svg>
+      </button>
+      <button class="round-btn big" id="btn-play" title="Play">
+        <svg viewBox="0 0 40 40"><path d="M13 8 L33 20 L13 32 Z"/></svg>
+      </button>
+      <button class="round-btn small" id="btn-settings" title="Settings">
+        <svg viewBox="0 0 40 40"><circle cx="20" cy="20" r="6"/><path d="M20 4v6M20 30v6M4 20h6M30 20h6M8.7 8.7l4.2 4.2M27.1 27.1l4.2 4.2M8.7 31.3l4.2-4.2M27.1 12.9l4.2-4.2"/></svg>
+      </button>
+    </div>
+    <div class="totals" id="totals"></div>
+    <p class="hint">Click, tap, <kbd>Space</kbd> or <kbd>&uarr;</kbd> to jump &middot; <kbd>Esc</kbd> pause &middot; <kbd>R</kbd> restart &middot; <kbd>F</kbd> fullscreen</p>
+  </section>
+
+  <!-- Level select -->
+  <section id="screen-levels" class="screen hidden">
+    <button class="back-btn" data-back="main" title="Back">&#10094;</button>
+    <div class="level-row">
+      <button class="arrow" id="lvl-prev" title="Previous level">&#10094;</button>
+      <div class="level-card" id="level-card">
+        <div class="card-top">
+          <canvas id="face" width="120" height="120"></canvas>
+          <div class="card-title">
+            <h2 id="lvl-name"></h2>
+            <div class="stars" id="lvl-stars"></div>
+          </div>
+          <div class="coins" id="lvl-coins"></div>
+        </div>
+        <div class="bar-label">Normal mode</div>
+        <div class="bar"><div class="fill" id="lvl-normal"></div><span id="lvl-normal-txt"></span></div>
+        <div class="bar-label">Practice mode</div>
+        <div class="bar practice"><div class="fill" id="lvl-practice"></div><span id="lvl-practice-txt"></span></div>
+        <div class="card-buttons">
+          <button class="pill green" id="btn-start">Play</button>
+          <button class="pill" id="btn-start-practice">Practice</button>
+        </div>
+        <div class="card-meta" id="lvl-meta"></div>
+      </div>
+      <button class="arrow" id="lvl-next" title="Next level">&#10095;</button>
+    </div>
+    <div class="dots" id="lvl-dots"></div>
+  </section>
+
+  <!-- Icon kit -->
+  <section id="screen-icons" class="screen hidden">
+    <button class="back-btn" data-back="main" title="Back">&#10094;</button>
+    <h2 class="screen-title">Icon Kit</h2>
+    <div class="icon-layout">
+      <canvas id="icon-preview" width="560" height="120"></canvas>
+      <div class="kit-section"><h3>Design</h3><div class="grid" id="kit-designs"></div></div>
+      <div class="kit-section"><h3>Primary colour</h3><div class="grid colors" id="kit-primary"></div></div>
+      <div class="kit-section"><h3>Secondary colour</h3><div class="grid colors" id="kit-secondary"></div></div>
+    </div>
+  </section>
+
+  <!-- Settings -->
+  <section id="screen-settings" class="screen hidden">
+    <button class="back-btn" data-back="main" title="Back">&#10094;</button>
+    <h2 class="screen-title">Settings</h2>
+    <div class="panel">
+      <label>Music <input type="range" id="set-music" min="0" max="1" step="0.05"></label>
+      <label>Sound effects <input type="range" id="set-sfx" min="0" max="1" step="0.05"></label>
+      <label class="check"><input type="checkbox" id="set-percent"> Show percentage</label>
+      <label class="check"><input type="checkbox" id="set-auto"> Auto checkpoints in practice</label>
+      <label class="check"><input type="checkbox" id="set-trail"> Trail for every form</label>
+      <button class="pill red" id="btn-reset">Reset progress</button>
+    </div>
+  </section>
+
+  <!-- In-game HUD -->
+  <div id="hud" class="hidden">
+    <button class="hud-btn" id="btn-pause" title="Pause (Esc)">&#10074;&#10074;</button>
+    <div id="practice-controls" class="hidden">
+      <button class="hud-btn cp" id="btn-cp-add" title="Place checkpoint (Z)">&#9670;+</button>
+      <button class="hud-btn cp" id="btn-cp-del" title="Remove checkpoint (X)">&#9670;&minus;</button>
+    </div>
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <!-- Pause -->
+  <section id="screen-pause" class="screen overlay hidden">
+    <div class="panel pause-panel">
+      <h2 id="pause-name"></h2>
+      <div class="bar-label">Normal mode</div>
+      <div class="bar"><div class="fill" id="pause-normal"></div><span id="pause-normal-txt"></span></div>
+      <div class="bar-label">Practice mode</div>
+      <div class="bar practice"><div class="fill" id="pause-practice"></div><span id="pause-practice-txt"></span></div>
+      <div class="card-buttons">
+        <button class="round-btn mid" id="btn-resume" title="Resume"><svg viewBox="0 0 40 40"><path d="M13 8 L33 20 L13 32 Z"/></svg></button>
+        <button class="round-btn mid" id="btn-restart" title="Restart (R)"><svg viewBox="0 0 40 40"><path d="M30 20a10 10 0 1 1-3-7.1" fill="none" stroke-width="4"/><path d="M29 6v9h-9z"/></svg></button>
+        <button class="round-btn mid" id="btn-toggle-practice" title="Practice mode"><svg viewBox="0 0 40 40"><path d="M20 6 L32 20 L20 34 L8 20 Z"/></svg></button>
+        <button class="round-btn mid" id="btn-exit" title="Back to levels"><svg viewBox="0 0 40 40"><path d="M8 10h24M8 20h24M8 30h24" fill="none" stroke-width="4"/></svg></button>
+      </div>
+      <label>Music <input type="range" id="pause-music" min="0" max="1" step="0.05"></label>
+      <label>Sound effects <input type="range" id="pause-sfx" min="0" max="1" step="0.05"></label>
+    </div>
+  </section>
+
+  <!-- Level complete -->
+  <section id="screen-complete" class="screen overlay hidden">
+    <div class="panel complete-panel">
+      <h2 class="complete-title" id="complete-title">Level Complete!</h2>
+      <div class="complete-stats" id="complete-stats"></div>
+      <div class="coins big" id="complete-coins"></div>
+      <div class="complete-reward" id="complete-reward"></div>
+      <div class="card-buttons">
+        <button class="round-btn mid" id="btn-again" title="Play again"><svg viewBox="0 0 40 40"><path d="M30 20a10 10 0 1 1-3-7.1" fill="none" stroke-width="4"/><path d="M29 6v9h-9z"/></svg></button>
+        <button class="round-btn mid" id="btn-done" title="Back to levels"><svg viewBox="0 0 40 40"><path d="M8 10h24M8 20h24M8 30h24" fill="none" stroke-width="4"/></svg></button>
+      </div>
+    </div>
+  </section>
+
+  <script src="js/levels.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
