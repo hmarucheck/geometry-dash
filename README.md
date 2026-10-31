@@ -13,7 +13,7 @@ original.
 
 ### In a browser (HTML / CSS / JavaScript)
 
-Open `web/index.html` in any modern browser. You don't need to install
+Open `index.html` (or the GitHub Pages site) in any modern browser. You don't need to install
 anything or run a server. It works with mouse, keyboard and touch screens.
 
 ### On the desktop (Python + pygame)
@@ -87,7 +87,7 @@ a corner. Coins are checked the same way.
 
 | Part | Language | Files |
 | --- | --- | --- |
-| Browser game | JavaScript, HTML, CSS | `web/` |
+| Browser game | JavaScript, HTML, CSS | `index.html`, `web/` |
 | Real-time music synth | JavaScript (Web Audio API) | `web/js/audio.js` |
 | Desktop game | Python (pygame) | `python/neonpulse/game.py` |
 | Offline music synth | Python (numpy) | `python/neonpulse/synth.py` |
