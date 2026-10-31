@@ -311,7 +311,8 @@
       this.canvas.style.height = h + 'px';
       this.W = this.canvas.width;
       this.H = this.canvas.height;
-      this.U = this.H / 11; // pixels per block: the view is 11 blocks tall
+      // Pixels per block: 11 blocks tall, but always at least 16 blocks wide.
+      this.U = Math.min(this.H / 11, this.W / 16);
       this.dpr = dpr;
     }
 

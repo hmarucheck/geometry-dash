@@ -314,7 +314,25 @@ kbd {
 .complete-stats span:nth-child(odd) { opacity: 0.75; }
 .complete-reward { font-weight: 900; font-size: 22px; color: var(--gold); min-height: 1em; }
 
+#rotate-hint { display: none; }
+@media (orientation: portrait) and (max-width: 700px) {
+  #rotate-hint {
+    display: block;
+    position: absolute;
+    top: 46%;
+    left: 16px;
+    right: 16px;
+    text-align: center;
+    font-weight: 800;
+    opacity: 0.85;
+    text-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+  }
+}
+
 @media (max-width: 600px) {
+  .card-top { flex-wrap: wrap; }
+  .card-top .coins { order: 3; width: 100%; justify-content: center; }
+  .card-title h2 { white-space: normal; overflow: visible; font-size: 26px; }
   .arrow { width: 32px; font-size: 40px; }
   .level-row { gap: 4px; }
   .level-card { padding: 14px; }

@@ -303,7 +303,7 @@
     const c = G.data.colors[0];
     G.bgColor = hexToRgb(c[1]);
     G.groundColor = hexToRgb(c[2]);
-    G.cam = { x: p.x - camLead(), y: -2.2 };
+    G.cam = { x: p.x - camLead(), y: floorCam() };
     G.ceilAlpha = 0;
     if (G.practice) {
       G.checkpoints = [];
@@ -319,6 +319,9 @@
   }
 
   function camLead() { return (R.W / R.U) * 0.3; }
+  // Lowest camera position: the ground sits about a fifth of the way up
+  // (more on tall portrait screens, so the action stays mid-screen).
+  function floorCam() { return -Math.max(2.2, (R.H / R.U) * 0.3); }
 
   function respawn() {
     const cp = G.checkpoints[G.checkpoints.length - 1];
@@ -539,22 +542,24 @@
         if (G.practice) respawn(); else restart(false);
       }
     } else if (G.won) {
-      p.x += SPEEDS[p.speed] * dt;
+      // The camera stops and the icon flies off into the distance.
+      p.x += SPEEDS[p.speed] * dt * 1.4;
+      p.y += dt * 4;
       G.winTimer -= dt;
       if (G.winTimer <= 0 && screen === 'play') showComplete();
     }
 
     // camera
     const lead = camLead();
-    G.cam.x = p.x - lead;
+    if (!G.won) G.cam.x = p.x - lead;
     const corridor = CEIL_MODES.has(p.mode);
     let ty;
-    if (corridor) ty = -1.0;
+    if (corridor) ty = -Math.max(1.0, (R.H / R.U - 9) / 2);
     else {
       const view = R.H / R.U;
-      ty = Math.max(-2.2, Math.min(G.cam.y, p.y - view * 0.25));
+      ty = Math.max(floorCam(), Math.min(G.cam.y, p.y - view * 0.25));
       if (p.y + 1 > G.cam.y + view * 0.72) ty = p.y + 1 - view * 0.72;
-      if (p.y < G.cam.y + view * 0.25) ty = Math.max(-2.2, p.y - view * 0.25);
+      if (p.y < G.cam.y + view * 0.25) ty = Math.max(floorCam(), p.y - view * 0.25);
     }
     G.cam.y += (ty - G.cam.y) * Math.min(1, dt * 5);
     G.ceilAlpha += ((corridor ? 1 : 0) - G.ceilAlpha) * Math.min(1, dt * 6);

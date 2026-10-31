@@ -32,9 +32,15 @@ EVERY = 2  # physics steps per decision (60 decisions per second)
 
 def _key(n):
     a, b = n[0], n[1]
+    # Only a summary of the input history: the full history would multiply the
+    # number of distinct states and make pruning lose narrow good paths.
+    hist = (n[2] & 3, bin(n[2]).count("1"))
     return (round(a.y * 10), round(a.vy * 1.2), round(b.y * 10), round(b.vy * 1.2),
-            a.g, b.g, a.mode, b.mode, a.on_ground, b.on_ground, a.buffered, n[2],
-            a.used, b.used, a.coins & b.coins, a.boost > 0, b.boost > 0, a.speed)
+            a.g, b.g, a.mode, b.mode, a.on_ground, b.on_ground, a.buffered, hist,
+            a.used, b.used, a.boost > 0, b.boost > 0, a.speed)
+
+
+FLYING = ("rocket", "saucer", "dart")
 
 
 def _calm(n):
@@ -42,7 +48,7 @@ def _calm(n):
     a, b = n[0], n[1]
     if a.mode != b.mode or a.g != b.g:
         return False
-    if a.mode in ("rocket", "dart", "saucer"):
+    if a.mode in FLYING:
         return abs(a.y - b.y) < 0.6
     return a.on_ground and b.on_ground and abs(a.y - b.y) < 0.01
 
@@ -96,26 +102,42 @@ class Search:
         return bin(m & self.calm).count("1") / bin(self.calm).count("1")
 
     def _prune(self, nodes):
-        """Keep calm states first (where real players actually are), then cover
-        as many calm lineages as possible, then fill up at random."""
+        """Keep calm states first (where real players actually are), then other
+        descendants of calm states, then whatever covers the most lineages."""
         nodes = list(nodes)
         self.rng.shuffle(nodes)
+        if sum(1 for n in nodes if n[0].mode in FLYING) * 2 > len(nodes):
+            # Flying forms steer by constantly pressing and releasing, so just
+            # keep as many calm lineages covered as possible.
+            out, rest, covered = [], [], ~self.calm
+            for n in nodes:
+                if n[5] & ~covered and len(out) < self.beam:
+                    covered |= n[5]
+                    out.append(n)
+                else:
+                    rest.append(n)
+            return out + rest[:self.beam - len(out)]
         calm = [n for n in nodes if _calm(n)][:self.beam // 2]
         taken = {id(n) for n in calm}
-        out = list(calm)
-        covered = ~self.calm
-        for n in out:
-            covered |= n[5]
-        rest = []
-        for n in nodes:
-            if id(n) in taken:
-                continue
-            if n[5] & ~covered and len(out) < self.beam:
+        from_calm = [n for n in nodes if id(n) not in taken and n[5] & self.calm]
+        # Steady inputs first: people hold or release, they don't flicker.
+        from_calm.sort(key=lambda n: bin((n[2] ^ (n[2] >> 1)) & self.mask).count("1"))
+        out = calm + from_calm[:self.beam - len(calm)]
+        if len(out) < self.beam:
+            taken.update(id(n) for n in out)
+            covered = 0
+            for n in out:
                 covered |= n[5]
-                out.append(n)
-            else:
-                rest.append(n)
-        out.extend(rest[:self.beam - len(out)])
+            rest = []
+            for n in nodes:
+                if id(n) in taken:
+                    continue
+                if n[5] & ~covered and len(out) < self.beam:
+                    covered |= n[5]
+                    out.append(n)
+                else:
+                    rest.append(n)
+            out.extend(rest[:self.beam - len(out)])
         return out
 
     def run(self, lvl, until_x, need_coin=None, coin_deadline=None, boundaries=None):
@@ -154,6 +176,10 @@ class Search:
                         self.frontier = [child]
                         return True
                     k = _key(child)
+                    if need_coin is not None:
+                        # Coins never change the physics, so they only count
+                        # when a particular coin is being checked.
+                        k += (((qa.coins & qb.coins) >> need_coin) & 1,)
                     old = nxt.get(k)
                     if old is None:
                         nxt[k] = child
@@ -185,6 +211,25 @@ def solve(data, need_coin=None):
         deadline = lvl.coins[need_coin].x + 1.5
     s.run(lvl, 1e9, need_coin, deadline, boundaries=data.get("segments", [0.0]))
     return (s.inputs() if s.won else None), s.furthest
+
+
+def route_coins(data, inputs):
+    """Coins collected by both the on-time and the late player on the winning run."""
+    lvl = Level(data)
+    delay = data.get("botDelay", 3)
+    a = Player(data.get("startMode", "cube"), data.get("startSpeed", 1))
+    b = a.clone()
+    hist = 0
+    mask = (1 << (delay + 2)) - 1
+    for v in inputs:
+        held = v == 1
+        h2 = ((hist << 1) | held) & mask
+        hb = bool((h2 >> delay) & 1)
+        for i in range(EVERY):
+            step(a, lvl, held, held and not (hist & 1) and i == 0)
+            step(b, lvl, hb, hb and not ((h2 >> (delay + 1)) & 1) and i == 0)
+        hist = h2
+    return a.coins & b.coins
 
 
 def replay(data, inputs):
@@ -227,7 +272,11 @@ def main():
         print(f"[{i}] {data['name']}: solved, even with inputs {data.get('botDelay')} frames late "
               f"({len(inputs) / 60:.1f}s of play, search {dt:.1f}s)", flush=True)
         if "--coins" in flags:
+            on_route = route_coins(data, inputs)
             for c in range(len(Level(data).coins)):
+                if (on_route >> c) & 1:
+                    print(f"      coin {c + 1}: reachable (on the winning route)", flush=True)
+                    continue
                 ci, _ = solve(data, need_coin=c)
                 print(f"      coin {c + 1}: {'reachable' if ci else 'NOT REACHABLE'}", flush=True)
                 failed = failed or ci is None

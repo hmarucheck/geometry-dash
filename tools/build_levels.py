@@ -24,7 +24,8 @@ sys.path.insert(0, os.path.join(HERE, "..", "python"))
 
 from compose import compose, compose_loop  # noqa: E402
 from neonpulse.physics import SPEEDS, Level  # noqa: E402
-from solve import Search  # noqa: E402
+from solve import EVERY, Search, route_coins, solve  # noqa: E402
+from neonpulse.physics import Player, step  # noqa: E402
 
 GROUND_MODES = ("cube", "mech")
 CORRIDOR_MODES = ("rocket", "ball", "saucer", "dart", "crawler")
@@ -32,12 +33,18 @@ BALL_TOP = 5.0
 # A pattern is kept only if this share of the bot's incoming states can get
 # through it, so nothing depends on one lucky approach.
 MIN_PASS_RATIO = 0.25
+# Flying forms are steered constantly, and many of the bot's states are at
+# heights or speeds no player would choose, so a lower share is enough there.
+MIN_PASS_RATIO_FLYING = 0.08
 MIN_COIN_RATIO = 0.08
 # Each pattern is judged from the states the bot is in about half a second of
 # travel before it (roughly human reaction time). This must stay over ~2.5
 # blocks so the next pattern's objects can't have mattered yet, which keeps
 # solve.py's replay exact.
 REACTION_TIME = 0.55
+# Extra blocks of space before each pattern (times speed) for forms whose
+# moves need a long run-up, since players see obstacles well ahead.
+LEAD_IN = {"mech": 3.0, "dart": 4.0, "rocket": 2.0, "saucer": 1.5}
 
 
 class Builder:
@@ -57,6 +64,9 @@ class Builder:
         self.side = 0  # ball/crawler: which side the next hazard goes on
         self.search = Search(delay, "cube", speed)
         self.segments = [0.0]
+        self.history = []  # state before each kept placement, for backtracking
+        self.force = []  # cube patterns that must appear in this level
+        self.picked = None
         self.rejected = 0
         self.stats = {}  # mode -> [attempts, accepted, gave up]
 
@@ -94,12 +104,13 @@ class Builder:
     # --- verification ----------------------------------------------------
     def _state(self):
         return (len(self.objs), self.x, self.time, self.coin_count, self.mode, self.speed,
-                self.side, self.search.snapshot())
+                self.side, self.search.snapshot(), len(self.segments))
 
     def _restore(self, st):
         del self.objs[st[0]:]
         self.x, self.time, self.coin_count, self.mode, self.speed, self.side = st[1:7]
         self.search.restore(st[7])
+        del self.segments[st[8]:]
 
     def margin(self):
         return max(2.5, REACTION_TIME * SPEEDS[self.speed])
@@ -107,10 +118,13 @@ class Builder:
     def _level(self):
         return Level({"name": "", "length": 1e9, "objects": self.objs})
 
-    def place(self, fn, gap_scale=1.0, min_ratio=MIN_PASS_RATIO):
+    def place(self, fn, gap_scale=1.0, min_ratio=None):
         """Add a pattern, then keep it only if the bot can get through it."""
+        if min_ratio is None:
+            min_ratio = MIN_PASS_RATIO_FLYING if self.mode in ("rocket", "saucer", "dart") else MIN_PASS_RATIO
         self.search.relabel()
         st = self._state()
+        self.picked = None
         fn()
         self.gap(gap_scale)
         until = self.x - self.margin()
@@ -127,6 +141,9 @@ class Builder:
             if self.coin_count > st[3]:
                 self.want_coin = False
             self.segments.append(until)
+            self.history.append(st)
+            if self.picked in self.force:
+                self.force.remove(self.picked)
             return True
         self._restore(st)
         self.rejected += 1
@@ -141,8 +158,16 @@ class Builder:
                 return
         st[2] += 1
         # Nothing fits here: leave some empty room, which is always passable.
-        if not self.place(lambda: self.advance(self.x + 4 * self.k), gap_scale, 0.0):
-            raise RuntimeError("dead end at x=%.1f (seed %s)" % (self.x, self.seed))
+        for _ in range(8):
+            if self.place(lambda: self.advance(self.x + 4 * self.k), gap_scale, 0.0):
+                return
+            self._backtrack()
+        raise RuntimeError("dead end at x=%.1f (seed %s)" % (self.x, self.seed))
+
+    def _backtrack(self):
+        """Undo the last kept placement (its unchecked tail left no way through)."""
+        if self.history:
+            self._restore(self.history.pop())
 
     # --- transitions -----------------------------------------------------
     def to_mode(self, mode):
@@ -157,7 +182,10 @@ class Builder:
             self.side = 0
             run = (9.0 if tall and mode in GROUND_MODES else 6.0) * self.k
             if mode == "ball":
-                self.block(x + 2, BALL_TOP, run - 2, 9 - BALL_TOP)
+                # Leave time to drop below the lowered ceiling first.
+                run = (11.0 if tall else 6.0) * self.k
+                start = x + (9.0 if tall else 2.0) * self.k
+                self.block(start, BALL_TOP, x + run - start, 9 - BALL_TOP)
             self.advance(x + run)
         self._place_required(fn, "portal")
 
@@ -171,9 +199,13 @@ class Builder:
         self._place_required(fn, "speed portal")
 
     def _place_required(self, fn, what):
-        for _ in range(6):
-            if self.place(fn, 0.0, 0.1):
+        for attempt in range(6):
+            if self.place(fn, 0.0, 0.0):
                 return
+            if attempt >= 1:
+                # The pattern before this one leaves no way through: swap it
+                # for empty space and try again.
+                self._backtrack()
             self.place(lambda: self.advance(self.x + 3 * self.k), 0.0, 0.0)
         raise RuntimeError("%s failed at x=%.1f (seed %s)" % (what, self.x, self.seed))
 
@@ -188,12 +220,15 @@ class Builder:
         k = self.k
         pool = ["spikes", "spikes", "block", "islands", "padjump"]
         if d >= 1:
-            pool += ["stairs", "orbpit", "blockspike", "platpad", "saw"]
+            pool += ["stairs", "orbpit", "blockspike", "platpad", "saw", "pinkpad", "redorb"]
         if d >= 2:
-            pool += ["grav", "pinkchain", "tower", "islands"]
+            pool += ["grav", "pinkchain", "tower", "islands", "blueorb", "redpad", "bluepad"]
         if d >= 3:
-            pool += ["bluepad", "spikes", "orbpit"]
+            pool += ["bluepad", "spikes", "orbpit", "greenorb", "blackorb"]
         p = r.choice(pool)
+        if self.force:
+            p = self.force[0]  # a showcase pattern this level must contain
+        self.picked = p
         if self.want_coin and p not in ("spikes", "platpad"):
             p = r.choice(["spikes", "platpad"])
         if p == "spikes":
@@ -248,14 +283,15 @@ class Builder:
             end = x + 2.2
         elif p == "grav":
             L = int(14 * k) + (4 if d >= 3 else 0)
-            self.add("p_gup", x, 0, h=4)
+            flip = r.random() < 0.4
+            self.add("p_gflip" if flip else "p_gup", x, 0, h=4)
             self.block(x + 1, 6, L, 1)
             sx = x + 5 * k
             while sx < x + L - 3 * k:
                 n = r.choice([1, 1, 2]) if d < 4 else r.choice([1, 2, 3])
                 self.spikes(sx, n, y=5, t="spike_d")
                 sx += n + 5.5 * k
-            self.add("p_gdown", x + L + 0.5, 3, h=4)
+            self.add("p_gflip" if flip else "p_gdown", x + L + 0.5, 3, h=4)
             end = x + L + 1.5 + 2 * k
         elif p == "pinkchain":
             self.spikes(x, 9)
@@ -267,6 +303,49 @@ class Builder:
             for i in range(3):
                 self.block(x + i * tw, 0, tw, i + 1)
             end = x + 3 * tw + 3 * k
+        elif p == "pinkpad":
+            self.add("pad_p", x, 0)
+            self.spikes(x + 1.2, 1)
+            self.block(x + 4, 0, 3, 1)
+            end = x + 7
+        elif p == "redorb":
+            self.spikes(x, 8)
+            self.add("orb_r", x + 2.0 * k, 2.0)
+            end = x + 8
+        elif p == "redpad":
+            self.add("pad_r", x, 0)
+            self.spikes(x + 1.5, 6)
+            self.block(x + 4, 4.5, 3, 1)
+            end = x + 8.5
+        elif p == "blueorb":
+            # tap the blue orb mid-jump to fall up onto the ceiling run
+            L = int(14 * k)
+            self.spikes(x, 3)
+            self.add("orb_b", x + 1.2 * k, 2.0)
+            self.block(x + 1, 6, L, 1)
+            self.spikes(x + 3, L - 3)
+            sx = x + 7 * k
+            while sx < x + L - 3 * k:
+                self.spikes(sx, 1, y=5, t="spike_sd")
+                sx += 6 * k
+            self.add("p_gdown", x + L + 0.5, 3, h=4)
+            end = x + L + 1.5 + 2 * k
+        elif p == "greenorb":
+            # ride the ceiling, then tap the green orb to dive back down
+            L = int(12 * k)
+            self.add("p_gup", x, 0, h=4)
+            self.block(x + 1, 6, L + 6, 1)
+            self.add("orb_g", x + L - 1, 4.3)
+            self.spikes(x + L + 1, 5, y=5, t="spike_d")
+            self.add("p_gdown", x + L + 7, 0, h=9)
+            end = x + L + 8 + 2 * k
+        elif p == "blackorb":
+            # bounce high off a pad, then slam down under the hanging spikes
+            self.add("pad_y", x, 0)
+            self.add("orb_k", x + 2.5 * k, 3.2)
+            self.block(x + 5 * k, 4.2, 4, 3)
+            self.spikes(x + 5 * k, 4, y=3.2, t="spike_d")
+            end = x + 5 * k + 4
         else:  # bluepad
             L = int(16 * k)
             self.add("pad_b", x, 0)
@@ -353,8 +432,11 @@ class Builder:
             else:
                 self.block(x, 0, n, 1)
                 self.spikes(x, n, y=1, t="spike_s")
-        else:
+        elif r.random() < 0.6:
             self.spikes(x, n, y=BALL_TOP - 1, t="spike_d")
+        else:
+            self.block(x, BALL_TOP - 1, n, 1)
+            self.spikes(x, n, y=BALL_TOP - 2, t="spike_sd")
         self.side ^= 1
         self.advance(x + n + (6.2 - 0.4 * d) * self.k)
         self.block(start, BALL_TOP, self.x - start, 9 - BALL_TOP)
@@ -398,20 +480,27 @@ class Builder:
         r = self.rng
         d = self.diff
         x = self.x
-        p = r.choice(["pillar", "pillar", "pit", "steps"])
+        k = self.k
+        p = r.choice(["pillar", "pillar", "pit", "steps", "spikepillar"])
         if p == "pillar" or self.want_coin:
-            h = r.choice([2, 2, 3]) if d < 3 else r.choice([2, 3])
+            h = r.choice([1, 2, 2, 3]) if d < 3 else r.choice([2, 3])
             self.block(x, 0, 1, h)
             self.coin(x + 0.5, h + 2.2)
             end = x + 1
         elif p == "pit":
-            n = r.randint(3, 4 + (d >= 3))
+            n = r.randint(2, 3 + (d >= 3))
             self.spikes(x, n)
             end = x + n
+        elif p == "spikepillar":
+            h = r.choice([1, 2])
+            self.block(x, 0, 2, h)
+            self.spikes(x + 0.5, 1, y=h, t="spike_s")
+            end = x + 2
         else:
+            sw = max(4, round(4 * k))
             for i in range(3):
-                self.block(x + i * 3, 0, 3, (i + 1) * 1.5 if d >= 2 else i + 1)
-            end = x + 9 + 3 * self.k
+                self.block(x + i * sw, 0, sw, i + 1)
+            end = x + 3 * sw + 3 * k
         self.advance(end)
 
     # --- crawler ---------------------------------------------------------
@@ -441,10 +530,16 @@ class Builder:
               "mech": self.mech_pattern, "ball": self.ball_pattern,
               "crawler": self.crawler_pattern}[mode]
         scale = {"rocket": 0.75, "saucer": 0.75, "dart": 0.75, "ball": 0.0, "crawler": 0.8}.get(mode, 1.0)
+        lead = LEAD_IN.get(mode, 0.0)
+
+        def pattern():
+            # Forms with long set-up moves get extra room to line up.
+            self.advance(self.x + lead * self.k)
+            fn()
         target = self.coin_count + 1
         for i in range(count):
             self.want_coin = coin_at is not None and i >= coin_at and self.coin_count < target
-            self.place_any(fn, scale)
+            self.place_any(pattern, scale)
         self.want_coin = False
 
     def finish(self, lvl_length_pad=14):
@@ -484,8 +579,8 @@ LEVELS = [
                   "lead": "pulse", "bass": "saw", "arp": "square", "pad": "saw",
                   "drums": "break", "bassRhythm": "sync", "cutoff": 2000},
         "colors": [["#14b84a", "#0b7a2f"], ["#0fb39a", "#077565"], ["#62c214", "#3b7a09"], ["#13a35c", "#086637"]],
-        "sections": [("cube", 7, 3), ("ball", 9, 1), ("cube", 7, None), ("crawler", 9, None),
-                     ("cube", 6, None), ("rocket", 5, 2)],
+        "sections": [("cube", 7, 3), ("ball", 9, 1), ("speed", 0), ("cube", 7, None), ("speed", 1),
+                     ("crawler", 9, None), ("cube", 6, None), ("rocket", 5, 2)],
     },
     {
         "name": "Skyline Drift", "diff": 2, "stars": 5, "speed": 1, "seed": 44,
@@ -497,13 +592,13 @@ LEVELS = [
                      ("rocket", 8, None), ("saucer", 6, 3), ("cube", 5, None)],
     },
     {
-        "name": "Zigzag Rush", "diff": 3, "stars": 6, "speed": 1, "seed": 55,
+        "name": "Zigzag Rush", "diff": 3, "stars": 6, "speed": 1, "seed": 55, "force": ["greenorb"],
         "music": {"seed": 505, "bpm": 150, "root": 52, "scale": "minor", "prog": [0, 3, 5, 4],
                   "lead": "saw", "bass": "square", "arp": "square", "pad": "saw",
                   "drums": "four", "bassRhythm": "gallop", "cutoff": 2800},
         "colors": [["#00c8e8", "#00809a"], ["#2a7bff", "#1447b3"], ["#00e0b0", "#00916f"], ["#3a5bff", "#1b2fb3"]],
         "sections": [("cube", 6, None), ("dart", 9, 4), ("speed", 2), ("cube", 6, None),
-                     ("dart", 9, 6), ("cube", 5, 3), ("rocket", 5, None)],
+                     ("dart", 9, 6), ("speed", 1), ("cube", 5, 3), ("rocket", 5, None)],
     },
     {
         "name": "Iron Stride", "diff": 3, "stars": 7, "speed": 1, "seed": 66,
@@ -524,7 +619,7 @@ LEVELS = [
                      ("ball", 7, None), ("mech", 6, 2), ("crawler", 7, None), ("speed", 3), ("cube", 6, 3)],
     },
     {
-        "name": "Final Voltage", "diff": 5, "stars": 10, "speed": 3, "seed": 88,
+        "name": "Final Voltage", "diff": 5, "stars": 10, "speed": 3, "seed": 88, "force": ["greenorb"],
         "music": {"seed": 808, "bpm": 174, "root": 52, "scale": "phrygian", "prog": [0, 1, 0, 6],
                   "lead": "saw", "bass": "saw", "arp": "square", "pad": "saw",
                   "drums": "dnb", "bassRhythm": "gallop", "cutoff": 3200},
@@ -541,9 +636,50 @@ PRACTICE_SONG = {"seed": 9002, "bpm": 92, "root": 60, "scale": "major", "prog": 
                  "lead": "triangle", "arp": "triangle", "cutoff": 1200}
 
 
+def trajectory(data, inputs, delay):
+    """Positions of the on-time (A) and late (B) players along the bot's winning run."""
+    lvl = Level(data)
+    a = Player(data["startMode"], data["startSpeed"])
+    b = a.clone()
+    hist = 0
+    mask = (1 << (delay + 2)) - 1
+    out = []
+    for v in inputs:
+        held = v == 1
+        h2 = ((hist << 1) | held) & mask
+        hb = bool((h2 >> delay) & 1)
+        for i in range(EVERY):
+            step(a, lvl, held, held and not (hist & 1) and i == 0)
+            step(b, lvl, hb, hb and not ((h2 >> (delay + 1)) & 1) and i == 0)
+        hist = h2
+        out.append((a.x, a.y, b.y, a.on_ground))
+    return out
+
+
+def fix_coins(data, inputs):
+    """Move any coin the full-level check can't collect onto a proven path nearby,
+    at the top of a jump where the on-time and late players agree."""
+    path = trajectory(data, inputs, data["botDelay"])
+    coins = [o for o in data["objects"] if o["t"] == "coin"]
+    on_route = route_coins(data, inputs)
+    moved = 0
+    for c in coins:
+        idx = int(c["r"])
+        if (on_route >> idx) & 1 or solve(data, need_coin=idx)[0]:
+            continue
+        near = [p for p in path if abs(p[0] - c["x"]) < 8 and abs(p[1] - p[2]) < 0.25]
+        if not near:
+            near = [p for p in path if abs(p[1] - p[2]) < 0.25]
+        best = max(near, key=lambda p: (not p[3], p[1], -abs(p[0] - c["x"])))
+        c["x"], c["y"] = round(best[0], 3), round((best[1] + best[2]) / 2, 3)
+        moved += 1
+    return moved
+
+
 def build_level(spec):
     delay = BOT_DELAY[spec["diff"]]
     b = Builder(spec["seed"], spec["diff"], spec["speed"], delay)
+    b.force = list(spec.get("force", []))
     for i, sec in enumerate(spec["sections"]):
         if sec[0] == "speed":
             b.set_speed(sec[1])
@@ -568,7 +704,7 @@ def build_level(spec):
     length = b.finish()
     print(f"  {spec['name']} pattern stats (tries, kept, gave up): {b.stats}", file=sys.stderr, flush=True)
     seconds = b.time + 3
-    return {
+    data = {
         "name": spec["name"],
         "difficulty": DIFFS[spec["diff"]],
         "diff": spec["diff"],
@@ -582,7 +718,10 @@ def build_level(spec):
         "segments": b.segments,
         "objects": b.objs,
         "song": compose(spec["music"], seconds),
-    }, b.rejected
+    }
+    moved = fix_coins(data, b.search.inputs())
+    print(f"  {spec['name']}: moved {moved} coin(s) onto a proven path", file=sys.stderr, flush=True)
+    return data, b.rejected
 
 
 def main():

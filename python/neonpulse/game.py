@@ -766,7 +766,9 @@ class Game:
                 else:
                     self.restart(False)
         else:
-            p.x += SPEEDS[p.speed] * dt
+            # The camera stops and the icon flies off into the distance.
+            p.x += SPEEDS[p.speed] * dt * 1.4
+            p.y += dt * 4
             g.win_timer -= dt
             if g.win_timer <= 0:
                 self.state = "complete"
@@ -819,8 +821,7 @@ class Game:
         for b in self.buttons:
             b.draw(surf, self.fonts, mouse)
         if self.toast:
-            r = text(surf, self.fonts["med"], self.toast[0], (W // 2, 70), center=True, shadow=True)
-            del r
+            text(surf, self.fonts["med"], self.toast[0], (W // 2, 70), center=True, shadow=True)
 
     def draw_main(self, surf):
         t = self.menu_t
@@ -993,7 +994,8 @@ class Run:
 
     def update_visuals(self, dt, icon):
         p = self.player
-        self.cam[0] = p.x - 6.4
+        if not self.won:
+            self.cam[0] = p.x - 6.4
         corridor = p.mode in CEIL_MODES
         if corridor:
             ty = -1.0

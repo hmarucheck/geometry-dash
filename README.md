@@ -75,10 +75,13 @@ The levels are not hand-tuned by trial and error. `tools/build_levels.py`
 grows each level one obstacle pattern at a time. After each pattern, a bot
 (`tools/solve.py`) plays it with the real physics. The bot controls two
 copies of the player at once: one gets its inputs on time and the other gets
-them **3–6 frames late** (depending on difficulty). A pattern only stays if
-both survive, starting from at least a quarter of the ways the player could
-reasonably arrive. That rules out frame-perfect jumps and patterns that only
-work with one lucky approach. Coins are checked the same way.
+the same inputs **3–6 frames late** (depending on difficulty). A pattern only
+stays if both survive. The bot also has to get through starting from where
+a calm player would be about half a second earlier, such as rolling along
+the floor or flying steadily, not just from one lucky position. That rules
+out frame-perfect jumps and patterns that only work with a trick. Patterns
+that fail are rerolled, and the builder backtracks if it paints itself into
+a corner. Coins are checked the same way.
 
 ## Languages and layout
 
